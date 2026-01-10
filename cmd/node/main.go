@@ -1,22 +1,31 @@
 package main
 
 import (
-	"log"
+	"os"
+	"time"
 
 	"distributed-scheduler/internal/raft"
 )
 
 func main() {
-	// Create a single node (no peers yet)
+	id := os.Args[1]
+	address := os.Args[2]
+
+	peers := os.Args[3:]
+
 	node := &raft.Node{
-		ID:          "node1",
-		Peers:      []string{},
+		ID:          id,
+		Peers:      peers,
 		State:       raft.Follower,
 		CurrentTerm: 0,
 	}
 
-	log.Printf("[%s] Node started as %s", node.ID, node.State)
+	go node.StartServer(address)
 
-	// Simulate election trigger
-	node.startElection()
+	// Wait a bit before starting election
+	time.Sleep(2 * time.Second)
+
+	node.StartElection()
+
+	select {} // keep process alive
 }
