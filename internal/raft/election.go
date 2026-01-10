@@ -1,32 +1,65 @@
 package raft
 
-import "log"
+import (
+	"bytes"
+	"encoding/json"
+	"log"
+	"net/http"
+)
 
 // startElection is called when election timeout expires
-func (n *Node) startElection() {
+func (n *Node) StartElection() {
 	n.mu.Lock()
 
-	// Become candidate
 	n.State = Candidate
-
-	// Increment term for new election
 	n.CurrentTerm++
-
-	// Vote for self
 	n.VotedFor = n.ID
 
-	currentTerm := n.CurrentTerm
-
+	term := n.CurrentTerm
 	n.mu.Unlock()
 
-	log.Printf("[%s] Starting election for term %d", n.ID, currentTerm)
+	log.Printf("[%s] Starting election for term %d", n.ID, term)
 
-	// Vote count starts at 1 (self-vote)
-	votes := 1
+	votes := 1 // self vote
+	majority := (len(n.Peers)+1)/2 + 1
 
-	// TODO:
-	// 1. Send RequestVote RPCs to peers
-	// 2. Count votes
-	// 3. If majority → become leader
-	_ = votes
+	// Send RequestVote to all peers
+	for _, peer := range n.Peers {
+		go func(peer string) {
+			req := RequestVoteRequest{
+				Term:        term,
+				CandidateID: n.ID,
+			}
+
+			data, _ := json.Marshal(req)
+			resp, err := http.Post(peer+"/request-vote", "application/json", bytes.NewBuffer(data))
+			if err != nil {
+				return
+			}
+			defer resp.Body.Close()
+
+			var voteResp RequestVoteResponse
+			json.NewDecoder(resp.Body).Decode(&voteResp)
+
+			n.mu.Lock()
+			defer n.mu.Unlock()
+
+			// Step down if higher term discovered
+			if voteResp.Term > n.CurrentTerm {
+				n.CurrentTerm = voteResp.Term
+				n.State = Follower
+				n.VotedFor = ""
+				return
+			}
+
+			if voteResp.VoteGranted && n.State == Candidate {
+				votes++
+				if votes >= majority {
+					n.State = Leader
+					n.LeaderID = n.ID
+					log.Printf("[%s] Became LEADER for term %d", n.ID, n.CurrentTerm)
+				}
+			}
+		}(peer)
+	}
 }
