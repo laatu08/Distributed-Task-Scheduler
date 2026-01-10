@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"time"
 )
 
 // startElection is called when election timeout expires
@@ -57,7 +58,10 @@ func (n *Node) StartElection() {
 				if votes >= majority {
 					n.State = Leader
 					n.LeaderID = n.ID
+					n.electionResetEvent = time.Now()
 					log.Printf("[%s] Became LEADER for term %d", n.ID, n.CurrentTerm)
+
+					go n.startHeartbeats()
 				}
 			}
 		}(peer)
