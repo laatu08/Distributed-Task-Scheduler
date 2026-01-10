@@ -1,8 +1,10 @@
 package raft
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
-// State represents the role of a Raft node
 type State string
 
 const (
@@ -11,26 +13,22 @@ const (
 	Leader    State = "leader"
 )
 
-// Node represents a single Raft node
 type Node struct {
-	// Mutex protects concurrent access
 	mu sync.Mutex
 
-	// Unique ID of this node
-	ID string
-
-	// List of peer addresses (host:port)
+	ID    string
 	Peers []string
-
-	// Current role of the node
 	State State
 
-	// Latest term this node has seen
 	CurrentTerm int
+	VotedFor    string
+	LeaderID    string
 
-	// Candidate ID that this node voted for in current term
-	VotedFor string
+	// Channel used to reset election timer
+	electionResetEvent time.Time
+}
 
-	// Known leader ID
-	LeaderID string
+// resetElectionTimer records the time of last heartbeat or vote
+func (n *Node) ResetElectionTimer() {
+	n.electionResetEvent = time.Now()
 }
