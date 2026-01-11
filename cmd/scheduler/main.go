@@ -1,35 +1,61 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
 	"time"
 
 	"distributed-task-scheduler/internal/scheduler"
-	"distributed-task-scheduler/internal/types"
-	"distributed-task-scheduler/internal/worker"
 	"distributed-task-scheduler/pkg/logger"
 )
 
+var sched *scheduler.Scheduler
+
 func main() {
-	logger.Info("Starting single-node scheduler")
+	logger.Info("Starting scheduler server")
 
-	s := scheduler.NewScheduler()
+	sched = scheduler.NewScheduler()
 
-	// Add tasks
-	for i := 1; i <= 10; i++ {
-		s.AddTask(&types.Task{
-			ID:      "task-" + string(rune('A'+i)),
-			Payload: "demo-task",
-		})
+	go reapLoop()
+
+	http.HandleFunc("/register", registerHandler)
+	http.HandleFunc("/heartbeat", heartbeatHandler)
+	http.HandleFunc("/task", taskHandler)
+
+	http.ListenAndServe(":8080", nil)
+}
+
+func registerHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct{ WorkerID string }
+	json.NewDecoder(r.Body).Decode(&req)
+
+	sched.RegisterWorker(req.WorkerID)
+	w.WriteHeader(http.StatusOK)
+}
+
+func heartbeatHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct{ WorkerID string }
+	json.NewDecoder(r.Body).Decode(&req)
+
+	sched.Heartbeat(req.WorkerID)
+	w.WriteHeader(http.StatusOK)
+}
+
+func taskHandler(w http.ResponseWriter, r *http.Request) {
+	workerID := r.URL.Query().Get("worker_id")
+
+	task, err := sched.GetNextTask(workerID)
+	if err != nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
 	}
 
-	// Start workers
-	w1 := worker.NewWorker("worker-1", s)
-	w2 := worker.NewWorker("worker-2", s)
+	json.NewEncoder(w).Encode(task)
+}
 
-	go w1.Start()
-	go w2.Start()
-
+func reapLoop() {
 	for {
-		time.Sleep(10 * time.Second)
+		time.Sleep(5 * time.Second)
+		sched.ReapDeadWorkers(10 * time.Second)
 	}
 }
