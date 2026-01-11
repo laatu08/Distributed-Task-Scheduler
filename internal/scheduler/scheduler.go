@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"errors"
 	"sync"
 	"time"
 
@@ -26,5 +27,42 @@ func (s *Scheduler) AddTask(task *types.Task) {
 
 	task.Status = types.TaskPending
 	task.CreatedAt = time.Now()
+	task.UpdatedAt = time.Now()
 	s.tasks[task.ID] = task
+}
+
+func (s *Scheduler) GetNextTask(workerID string) (*types.Task, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, task := range s.tasks {
+		if task.Status == types.TaskPending {
+			task.Status = types.TaskRunning
+			task.WorkerID = workerID
+			task.UpdatedAt = time.Now()
+			return task, nil
+		}
+	}
+
+	return nil, errors.New("no pending tasks")
+}
+
+func (s *Scheduler) CompleteTask(taskID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if task, ok := s.tasks[taskID]; ok {
+		task.Status = types.TaskDone
+		task.UpdatedAt = time.Now()
+	}
+}
+
+func (s *Scheduler) FailTask(taskID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if task, ok := s.tasks[taskID]; ok {
+		task.Status = types.TaskFailed
+		task.UpdatedAt = time.Now()
+	}
 }
