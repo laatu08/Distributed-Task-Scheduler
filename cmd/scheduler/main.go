@@ -55,6 +55,7 @@ func main() {
 	http.HandleFunc("/task", taskHandler)
 	http.HandleFunc("/task/submit", submitTaskHandler)
 	http.HandleFunc("/task/complete", taskCompleteHandler)
+	http.HandleFunc("/task/fail", taskFailHandler)
 
 	http.HandleFunc("/debug/tasks", func(w http.ResponseWriter, _ *http.Request) {
 		sched.DumpTasks()
@@ -207,6 +208,31 @@ func taskCompleteHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		// stale epoch or invalid task
 		http.Error(w, "stale or invalid task completion", http.StatusForbidden)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func taskFailHandler(w http.ResponseWriter, r *http.Request) {
+	if !sched.IsLeader() {
+		http.Error(w, "not leader", http.StatusForbidden)
+		return
+	}
+
+	var req struct {
+		TaskID string `json:"task_id"`
+		Epoch  int64  `json:"epoch"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	ok := sched.FailTask(req.TaskID, req.Epoch)
+	if !ok {
+		http.Error(w, "stale or invalid task failure", http.StatusForbidden)
 		return
 	}
 

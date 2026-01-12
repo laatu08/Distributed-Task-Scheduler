@@ -3,10 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"math/rand"
 	"net/http"
 	"time"
-	// "math/rand"
-	
 
 	"distributed-task-scheduler/pkg/logger"
 	"github.com/google/uuid"
@@ -20,13 +19,13 @@ var schedulerURLs = []string{
 
 var rrIndex = 0
 
-
 type Task struct {
 	ID    string `json:"id"`
 	Epoch int64  `json:"epoch"`
 }
 
 func main() {
+	rand.Seed(time.Now().UnixNano())
 	workerID := uuid.New().String()
 
 	for {
@@ -49,7 +48,6 @@ func nextScheduler() string {
 	rrIndex = (rrIndex + 1) % len(schedulerURLs)
 	return url
 }
-
 
 /* ---------------- Registration ---------------- */
 func register(workerID string) bool {
@@ -112,7 +110,6 @@ func heartbeatLoop(workerID string) {
 	}
 }
 
-
 /* ---------------- Task execution ---------------- */
 
 func fetchAndExecute(workerID string) {
@@ -141,11 +138,14 @@ func fetchAndExecute(workerID string) {
 
 		time.Sleep(2 * time.Second)
 
-		completeTask(workerID, task, scheduler)
+		if rand.Intn(2) == 0 {
+			failTask(workerID, task, scheduler)
+		} else {
+			completeTask(workerID, task, scheduler)
+		}
 		return
 	}
 }
-
 
 /* ---------------- Completion ---------------- */
 
@@ -179,3 +179,32 @@ func completeTask(workerID string, task Task, scheduler string) {
 	)
 }
 
+func failTask(workerID string, task Task, scheduler string) {
+	body, _ := json.Marshal(map[string]any{
+		"task_id": task.ID,
+		"epoch":   task.Epoch,
+	})
+
+	resp, err := http.Post(
+		scheduler+"/task/fail",
+		"application/json",
+		bytes.NewBuffer(body),
+	)
+
+	if err != nil {
+		return
+	}
+
+	if resp.StatusCode == http.StatusForbidden {
+		logger.Info(
+			"Failure rejected for task %s (stale epoch)",
+			task.ID,
+		)
+		return
+	}
+
+	logger.Error(
+		"Worker %s FAILED task %s (epoch=%d)",
+		workerID, task.ID, task.Epoch,
+	)
+}
