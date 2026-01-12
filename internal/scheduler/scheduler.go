@@ -36,11 +36,18 @@ func (s *Scheduler) GetNextTask(workerID string) (*types.Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	worker, ok := s.workers[workerID]
+	if !ok || !worker.Alive {
+		return nil, errors.New("worker not alive")
+	}
+
 	for _, task := range s.tasks {
 		if task.Status == types.TaskPending {
 			task.Status = types.TaskRunning
 			task.WorkerID = workerID
 			task.UpdatedAt = time.Now()
+
+			logger.Info("Assigned task %s to worker %s", task.ID, workerID)
 			return task, nil
 		}
 	}
@@ -104,7 +111,39 @@ func (s *Scheduler) ReapDeadWorkers(timeout time.Duration) {
 		if w.Alive && now.Sub(w.LastSeen) > timeout {
 			w.Alive = false
 			logger.Error("Worker DEAD: %s", w.ID)
+
+			s.ReassignTasksFromDeadWorker(w.ID)
 		}
+	}
+}
+
+
+func (s *Scheduler) ReassignTasksFromDeadWorker(workerID string) {
+	for _, task := range s.tasks {
+		if task.WorkerID == workerID && task.Status == types.TaskRunning {
+			task.Status = types.TaskPending
+			task.WorkerID = ""
+			task.UpdatedAt = time.Now()
+
+			logger.Info(
+				"Task %s re-queued due to worker %s failure",
+				task.ID,
+				workerID,
+			)
+		}
+	}
+}
+
+
+func (s *Scheduler) DumpTasks() {
+	logger.Info("This is analytics")
+	for _, t := range s.tasks {
+		logger.Info(
+			"Task %s | status=%s | worker=%s",
+			t.ID,
+			t.Status,
+			t.WorkerID,
+		)
 	}
 }
 
