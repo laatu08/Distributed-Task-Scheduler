@@ -1,22 +1,22 @@
 package election
 
 import (
-	"sync"
+	// "sync"
 	"time"
 )
 
-type LeaderElection struct {
-	mu          sync.Mutex
-	leaderID    string
-	leaseUntil  time.Time
-	leasePeriod time.Duration
-}
+// type LeaderElection struct {
+// 	mu          sync.Mutex
+// 	leaderID    string
+// 	leaseUntil  time.Time
+// 	leasePeriod time.Duration
+// }
 
-func NewLeaderElection(leasePeriod time.Duration) *LeaderElection {
-	return &LeaderElection{
-		leasePeriod: leasePeriod,
-	}
-}
+// func NewLeaderElection(leasePeriod time.Duration) *LeaderElection {
+// 	return &LeaderElection{
+// 		leasePeriod: leasePeriod,
+// 	}
+// }
 
 func (e *DBElection) TryAcquire(nodeID string) (bool, int64, error) {
 	now := time.Now().Unix()
