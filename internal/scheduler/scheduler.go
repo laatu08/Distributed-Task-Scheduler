@@ -17,9 +17,9 @@ type Scheduler struct {
 
 	nodeID   string
 	election *election.DBElection
+
+	epoch int64
 }
-
-
 
 func NewScheduler(nodeID string, election *election.DBElection) *Scheduler {
 	return &Scheduler{
@@ -29,8 +29,6 @@ func NewScheduler(nodeID string, election *election.DBElection) *Scheduler {
 		election: election,
 	}
 }
-
-
 
 func (s *Scheduler) AddTask(task *types.Task) {
 	if !s.IsLeader() {
@@ -54,7 +52,6 @@ func (s *Scheduler) GetNextTask(workerID string) (*types.Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-
 	worker, ok := s.workers[workerID]
 	if !ok || !worker.Alive {
 		return nil, errors.New("worker not alive")
@@ -64,6 +61,7 @@ func (s *Scheduler) GetNextTask(workerID string) (*types.Task, error) {
 		if task.Status == types.TaskPending {
 			task.Status = types.TaskRunning
 			task.WorkerID = workerID
+			task.Epoch = s.epoch
 			task.UpdatedAt = time.Now()
 
 			logger.Info("Assigned task %s to worker %s", task.ID, workerID)
@@ -74,26 +72,59 @@ func (s *Scheduler) GetNextTask(workerID string) (*types.Task, error) {
 	return nil, errors.New("no pending tasks")
 }
 
-func (s *Scheduler) CompleteTask(taskID string) {
+func (s *Scheduler) CompleteTask(taskID string, epoch int64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if task, ok := s.tasks[taskID]; ok {
-		task.Status = types.TaskDone
-		task.UpdatedAt = time.Now()
+	task, ok := s.tasks[taskID]
+	if !ok {
+		logger.Error("Completion for unknown task %s", taskID)
+		return false
 	}
+
+	if task.Epoch != epoch {
+		logger.Error(
+			"Rejected completion of task %s: stale epoch (got=%d, expected=%d)",
+			taskID, epoch, task.Epoch,
+		)
+		return false
+	}
+
+	task.Status = types.TaskDone
+	task.UpdatedAt = time.Now()
+
+	logger.Info(
+		"Task %s marked DONE by epoch %d",
+		taskID, epoch,
+	)
+
+		return true
 }
 
-func (s *Scheduler) FailTask(taskID string) {
+
+func (s *Scheduler) FailTask(taskID string, epoch int64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if task, ok := s.tasks[taskID]; ok {
-		task.Status = types.TaskFailed
-		task.UpdatedAt = time.Now()
+	task, ok := s.tasks[taskID]
+	if !ok {
+		return false
 	}
-}
 
+	if task.Epoch != epoch {
+		logger.Error(
+			"Rejected failure of task %s: stale epoch",
+			taskID,
+		)
+		return false
+	}
+
+	task.Status = types.TaskFailed
+	task.UpdatedAt = time.Now()
+
+	logger.Error("Task %s marked FAILED", taskID)
+	return true
+}
 
 func (s *Scheduler) RegisterWorker(workerID string) {
 	s.mu.Lock()
@@ -136,7 +167,6 @@ func (s *Scheduler) ReapDeadWorkers(timeout time.Duration) {
 	}
 }
 
-
 func (s *Scheduler) ReassignTasksFromDeadWorker(workerID string) {
 	for _, task := range s.tasks {
 		if task.WorkerID == workerID && task.Status == types.TaskRunning {
@@ -153,7 +183,6 @@ func (s *Scheduler) ReassignTasksFromDeadWorker(workerID string) {
 	}
 }
 
-
 func (s *Scheduler) DumpTasks() {
 	logger.Info("This is analytics")
 	for _, t := range s.tasks {
@@ -166,12 +195,18 @@ func (s *Scheduler) DumpTasks() {
 	}
 }
 
-
 // TryBecomeLeader attempts to acquire or renew leadership.
 // Returns true if this node is the leader.
 func (s *Scheduler) TryBecomeLeader() bool {
-	ok, _ := s.election.TryAcquire(s.nodeID)
+	ok, epoch, _ := s.election.TryAcquire(s.nodeID)
+	if ok {
+		s.epoch = epoch
+	}
 	return ok
+}
+
+func (s *Scheduler) CurrentEpoch() int64 {
+	return s.epoch
 }
 
 func (s *Scheduler) IsLeader() bool {

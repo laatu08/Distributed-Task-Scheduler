@@ -13,11 +13,11 @@ func Init(path string) (*sql.DB, error) {
 
 	schema := `
 	CREATE TABLE IF NOT EXISTS leader_leases (
-		name TEXT PRIMARY KEY,
-		holder_id TEXT,
-		lease_until INTEGER
-	);
-	`
+    name TEXT PRIMARY KEY,
+    holder_id TEXT,
+    lease_until INTEGER,
+    epoch INTEGER
+);`
 
 	_, err = db.Exec(schema)
 	if err != nil {

@@ -16,6 +16,7 @@ type Task struct {
 	Payload   string
 	Status    TaskStatus
 	WorkerID  string
+	Epoch     int64
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

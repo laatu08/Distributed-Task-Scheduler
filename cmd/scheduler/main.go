@@ -54,6 +54,7 @@ func main() {
 	http.HandleFunc("/heartbeat", heartbeatHandler)
 	http.HandleFunc("/task", taskHandler)
 	http.HandleFunc("/task/submit", submitTaskHandler)
+	http.HandleFunc("/task/complete", taskCompleteHandler)
 
 	http.HandleFunc("/debug/tasks", func(w http.ResponseWriter, _ *http.Request) {
 		sched.DumpTasks()
@@ -104,6 +105,11 @@ func leaderLoop() {
 /* -------------------- Handlers -------------------- */
 
 func registerHandler(w http.ResponseWriter, r *http.Request) {
+	if !sched.IsLeader() {
+		http.Error(w, "not leader", http.StatusForbidden)
+		return
+	}
+
 	var req struct{ WorkerID string }
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
@@ -111,7 +117,13 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+
 func heartbeatHandler(w http.ResponseWriter, r *http.Request) {
+	if !sched.IsLeader() {
+		http.Error(w, "not leader", http.StatusForbidden)
+		return
+	}
+
 	var req struct{ WorkerID string }
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
@@ -119,7 +131,13 @@ func heartbeatHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+
 func taskHandler(w http.ResponseWriter, r *http.Request) {
+	if !sched.IsLeader() {
+		http.Error(w, "not leader", http.StatusForbidden)
+		return
+	}
+
 	workerID := r.URL.Query().Get("worker_id")
 
 	task, err := sched.GetNextTask(workerID)
@@ -130,6 +148,7 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(task)
 }
+
 
 func submitTaskHandler(w http.ResponseWriter, r *http.Request) {
 	if !sched.IsLeader() {
@@ -165,4 +184,31 @@ func reapLoop() {
 		time.Sleep(5 * time.Second)
 		sched.ReapDeadWorkers(10 * time.Second)
 	}
+}
+
+
+func taskCompleteHandler(w http.ResponseWriter, r *http.Request) {
+	if !sched.IsLeader() {
+		http.Error(w, "not leader", http.StatusForbidden)
+		return
+	}
+
+	var req struct {
+		TaskID string `json:"task_id"`
+		Epoch  int64  `json:"epoch"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	ok := sched.CompleteTask(req.TaskID, req.Epoch)
+	if !ok {
+		// stale epoch or invalid task
+		http.Error(w, "stale or invalid task completion", http.StatusForbidden)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }

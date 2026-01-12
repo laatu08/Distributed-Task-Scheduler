@@ -18,65 +18,68 @@ func NewLeaderElection(leasePeriod time.Duration) *LeaderElection {
 	}
 }
 
-func (e *DBElection) TryAcquire(nodeID string) (bool, error) {
+func (e *DBElection) TryAcquire(nodeID string) (bool, int64, error) {
 	now := time.Now().Unix()
 	expires := time.Now().Add(e.leaseTTL).Unix()
 
 	tx, err := e.db.Begin()
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	defer tx.Rollback()
 
-	// 1️⃣ Try to UPDATE existing lease
+	// Try to update expired lease OR renew own lease
 	res, err := tx.Exec(`
 		UPDATE leader_leases
-		SET holder_id = ?, lease_until = ?
+		SET holder_id = ?,
+		    lease_until = ?,
+		    epoch = CASE
+		      WHEN holder_id = ? THEN epoch
+		      ELSE epoch + 1
+		    END
 		WHERE name = ?
 		  AND (lease_until < ? OR holder_id = ?)
-	`, nodeID, expires, e.leaseName, now, nodeID)
+	`, nodeID, expires, nodeID, e.leaseName, now, nodeID)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-
-	// ✅ Successfully acquired or renewed
+	affected, _ := res.RowsAffected()
 	if affected == 1 {
-		if err := tx.Commit(); err != nil {
-			return false, err
+		var epoch int64
+		err := tx.QueryRow(`
+			SELECT epoch FROM leader_leases WHERE name = ?
+		`, e.leaseName).Scan(&epoch)
+		if err != nil {
+			return false, 0, err
 		}
-		return true, nil
+
+		if err := tx.Commit(); err != nil {
+			return false, 0, err
+		}
+		return true, epoch, nil
 	}
 
-	// 2️⃣ Try to INSERT only if lease does not exist
+	// Try initial insert
 	res, err = tx.Exec(`
-		INSERT OR IGNORE INTO leader_leases(name, holder_id, lease_until)
-		VALUES (?, ?, ?)
+		INSERT OR IGNORE INTO leader_leases(name, holder_id, lease_until, epoch)
+		VALUES (?, ?, ?, 1)
 	`, e.leaseName, nodeID, expires)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 
-	affected, err = res.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-
-	// ✅ Inserted → leader
+	affected, _ = res.RowsAffected()
 	if affected == 1 {
 		if err := tx.Commit(); err != nil {
-			return false, err
+			return false, 0, err
 		}
-		return true, nil
+		return true, 1, nil
 	}
 
-	// ❌ Someone else holds the lease
-	return false, nil
+	return false, 0, nil
 }
+
 
 
 func (e *DBElection) IsLeader(nodeID string) (bool, error) {
