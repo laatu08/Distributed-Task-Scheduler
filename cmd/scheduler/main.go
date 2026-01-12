@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	"distributed-task-scheduler/internal/db"
+	"distributed-task-scheduler/internal/election"
 	"distributed-task-scheduler/internal/scheduler"
 	"distributed-task-scheduler/internal/types"
 	"distributed-task-scheduler/pkg/logger"
@@ -29,7 +31,19 @@ func main() {
 	logger.Info("Starting scheduler server: %s", nodeID)
 
 	// ---- Init scheduler with node ID ----
-	sched = scheduler.NewScheduler(nodeID)
+	dbConn, err := db.Init("leader.db")
+	if err != nil {
+		logger.Error("DB init failed: %v", err)
+		return
+	}
+
+	election := election.NewDBElection(
+		dbConn,
+		"scheduler",
+		5*time.Second,
+	)
+
+	sched = scheduler.NewScheduler(nodeID, election)
 
 	// ---- Background loops ----
 	go reapLoop()
