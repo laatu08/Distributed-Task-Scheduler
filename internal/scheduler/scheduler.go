@@ -5,24 +5,35 @@ import (
 	"sync"
 	"time"
 
+	"distributed-task-scheduler/internal/election"
 	"distributed-task-scheduler/internal/types"
 	"distributed-task-scheduler/pkg/logger"
 )
 
 type Scheduler struct {
-	mu      sync.Mutex
-	tasks   map[string]*types.Task
-	workers map[string]*types.Worker
+	mu        sync.Mutex
+	tasks     map[string]*types.Task
+	workers   map[string]*types.Worker
+	election  *election.LeaderElection
+	nodeID    string
 }
 
-func NewScheduler() *Scheduler {
+
+func NewScheduler(nodeID string) *Scheduler {
 	return &Scheduler{
-		tasks:   make(map[string]*types.Task),
+		tasks:    make(map[string]*types.Task),
 		workers: make(map[string]*types.Worker),
+		election: election.NewLeaderElection(5 * time.Second),
+		nodeID:   nodeID,
 	}
 }
 
+
 func (s *Scheduler) AddTask(task *types.Task) {
+	if !s.IsLeader() {
+		return
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -33,8 +44,13 @@ func (s *Scheduler) AddTask(task *types.Task) {
 }
 
 func (s *Scheduler) GetNextTask(workerID string) (*types.Task, error) {
+	if !s.IsLeader() {
+		return nil, errors.New("not leader")
+	}
+	
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 
 	worker, ok := s.workers[workerID]
 	if !ok || !worker.Alive {
@@ -147,3 +163,14 @@ func (s *Scheduler) DumpTasks() {
 	}
 }
 
+
+// TryBecomeLeader attempts to acquire or renew leadership.
+// Returns true if this node is the leader.
+func (s *Scheduler) TryBecomeLeader() bool {
+	return s.election.TryAcquire(s.nodeID)
+}
+
+// IsLeader returns true if this node currently holds leadership.
+func (s *Scheduler) IsLeader() bool {
+	return s.election.IsLeader(s.nodeID)
+}

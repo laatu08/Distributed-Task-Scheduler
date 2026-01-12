@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"net/http"
 	"time"
 
@@ -11,27 +12,86 @@ import (
 )
 
 var sched *scheduler.Scheduler
+var nodeID string
+var port string
 
 func main() {
-	logger.Info("Starting scheduler server")
+	// ---- CLI flags ----
+	flag.StringVar(&nodeID, "id", "", "scheduler node ID")
+	flag.StringVar(&port, "port", "8080", "http port")
+	flag.Parse()
 
-	sched = scheduler.NewScheduler()
+	if nodeID == "" {
+		logger.Error("node ID is required. Use --id=<node-id>")
+		return
+	}
 
+	logger.Info("Starting scheduler server: %s", nodeID)
+
+	// ---- Init scheduler with node ID ----
+	sched = scheduler.NewScheduler(nodeID)
+
+	// ---- Background loops ----
 	go reapLoop()
+	go leaderLoop()
 
+	// ---- HTTP endpoints ----
 	http.HandleFunc("/register", registerHandler)
 	http.HandleFunc("/heartbeat", heartbeatHandler)
 	http.HandleFunc("/task", taskHandler)
+	http.HandleFunc("/task/submit", submitTaskHandler)
+
 	http.HandleFunc("/debug/tasks", func(w http.ResponseWriter, _ *http.Request) {
 		sched.DumpTasks()
 	})
-	http.HandleFunc("/task/submit", submitTaskHandler)
-	http.ListenAndServe(":8080", nil)
+
+	addr := ":" + port
+	logger.Info("Scheduler %s listening on %s", nodeID, addr)
+
+	if err := http.ListenAndServe(addr, nil); err != nil {
+		logger.Error("HTTP server failed: %v", err)
+	}
 }
+
+/* -------------------- Leader Election -------------------- */
+
+// func leaderLoop() {
+// 	ticker := time.NewTicker(2 * time.Second)
+// 	defer ticker.Stop()
+
+// 	for range ticker.C {
+// 		if sched.TryBecomeLeader() {
+// 			logger.Info("Node %s is LEADER", nodeID)
+// 		}
+// 	}
+// }
+
+func leaderLoop() {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	wasLeader := false
+
+	for range ticker.C {
+		isLeader := sched.TryBecomeLeader()
+
+		if isLeader && !wasLeader {
+			logger.Info("Node %s became LEADER", nodeID)
+		}
+
+		if !isLeader && wasLeader {
+			logger.Info("Node %s lost leadership", nodeID)
+		}
+
+		wasLeader = isLeader
+	}
+}
+
+/* -------------------- Handlers -------------------- */
 
 func registerHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct{ WorkerID string }
-	json.NewDecoder(r.Body).Decode(&req)
+	_ = json.NewDecoder(r.Body).Decode(&req)
 
 	sched.RegisterWorker(req.WorkerID)
 	w.WriteHeader(http.StatusOK)
@@ -39,7 +99,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 
 func heartbeatHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct{ WorkerID string }
-	json.NewDecoder(r.Body).Decode(&req)
+	_ = json.NewDecoder(r.Body).Decode(&req)
 
 	sched.Heartbeat(req.WorkerID)
 	w.WriteHeader(http.StatusOK)
@@ -57,14 +117,12 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(task)
 }
 
-func reapLoop() {
-	for {
-		time.Sleep(5 * time.Second)
-		sched.ReapDeadWorkers(10 * time.Second)
-	}
-}
-
 func submitTaskHandler(w http.ResponseWriter, r *http.Request) {
+	if !sched.IsLeader() {
+		http.Error(w, "not leader", http.StatusForbidden)
+		return
+	}
+
 	var req struct {
 		ID      string `json:"id"`
 		Payload string `json:"payload"`
@@ -84,4 +142,13 @@ func submitTaskHandler(w http.ResponseWriter, r *http.Request) {
 
 	logger.Info("Task submitted: %s", task.ID)
 	w.WriteHeader(http.StatusCreated)
+}
+
+/* -------------------- Background -------------------- */
+
+func reapLoop() {
+	for {
+		time.Sleep(5 * time.Second)
+		sched.ReapDeadWorkers(10 * time.Second)
+	}
 }
