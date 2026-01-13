@@ -133,11 +133,12 @@ func (s *Scheduler) FailTask(taskID string, epoch int64) bool {
 
 	task.RetryCount++
 	task.UpdatedAt = time.Now()
-	atomic.AddInt64(&s.Stats.TasksFailed, 1)
+	// atomic.AddInt64(&s.Stats.TasksFailed, 1)
+	atomic.AddInt64(&s.Stats.TasksRetried, 1)
 	// retries exhausted → terminal failure
 	if task.RetryCount > task.MaxRetries {
 		task.Status = types.TaskFailed
-		atomic.AddInt64(&s.Stats.TasksRetried, 1)
+		atomic.AddInt64(&s.Stats.TasksFailed, 1)
 		logger.Error(
 			"Task %s permanently FAILED after %d retries",
 			task.ID, task.RetryCount-1,
