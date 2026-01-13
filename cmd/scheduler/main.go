@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"distributed-task-scheduler/internal/db"
@@ -56,6 +57,7 @@ func main() {
 	http.HandleFunc("/task/submit", submitTaskHandler)
 	http.HandleFunc("/task/complete", taskCompleteHandler)
 	http.HandleFunc("/task/fail", taskFailHandler)
+	http.HandleFunc("/metrics", metricsHandler)
 
 	http.HandleFunc("/debug/tasks", func(w http.ResponseWriter, _ *http.Request) {
 		sched.DumpTasks()
@@ -82,6 +84,12 @@ func main() {
 // 	}
 // }
 
+func metricsHandler(w http.ResponseWriter, r *http.Request) {
+	stats := sched.GetStats()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
+}
+
 func leaderLoop() {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -93,6 +101,7 @@ func leaderLoop() {
 
 		if isLeader && !wasLeader {
 			logger.Info("Node %s became LEADER", nodeID)
+			atomic.AddInt64(&sched.Stats.LeaderElections, 1)
 		}
 
 		if !isLeader && wasLeader {
@@ -238,3 +247,4 @@ func taskFailHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 }
+

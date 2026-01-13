@@ -3,6 +3,7 @@ package scheduler
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"distributed-task-scheduler/internal/election"
@@ -19,6 +20,7 @@ type Scheduler struct {
 	election *election.DBElection
 
 	epoch int64
+	Stats Stats
 }
 
 func NewScheduler(nodeID string, election *election.DBElection) *Scheduler {
@@ -45,6 +47,8 @@ func (s *Scheduler) AddTask(task *types.Task) {
 	task.CreatedAt = time.Now()
 	task.UpdatedAt = time.Now()
 	s.tasks[task.ID] = task
+
+	atomic.AddInt64(&s.Stats.TasksSubmitted, 1)
 }
 
 func (s *Scheduler) GetNextTask(workerID string) (*types.Task, error) {
@@ -66,6 +70,8 @@ func (s *Scheduler) GetNextTask(workerID string) (*types.Task, error) {
 			task.WorkerID = workerID
 			task.Epoch = s.epoch
 			task.UpdatedAt = time.Now()
+
+			atomic.AddInt64(&s.Stats.TasksAssigned, 1)
 
 			logger.Info("Assigned task %s to worker %s", task.ID, workerID)
 			return task, nil
@@ -96,6 +102,8 @@ func (s *Scheduler) CompleteTask(taskID string, epoch int64) bool {
 	task.Status = types.TaskDone
 	task.UpdatedAt = time.Now()
 
+	atomic.AddInt64(&s.Stats.TasksCompleted, 1)
+
 	logger.Info(
 		"Task %s marked DONE by epoch %d",
 		taskID, epoch,
@@ -115,6 +123,7 @@ func (s *Scheduler) FailTask(taskID string, epoch int64) bool {
 
 	// fencing
 	if task.Epoch != epoch {
+		atomic.AddInt64(&s.Stats.StaleFailures, 1)
 		logger.Error(
 			"Rejected failure of task %s: stale epoch",
 			taskID,
@@ -124,10 +133,11 @@ func (s *Scheduler) FailTask(taskID string, epoch int64) bool {
 
 	task.RetryCount++
 	task.UpdatedAt = time.Now()
-
+	atomic.AddInt64(&s.Stats.TasksFailed, 1)
 	// retries exhausted → terminal failure
 	if task.RetryCount > task.MaxRetries {
 		task.Status = types.TaskFailed
+		atomic.AddInt64(&s.Stats.TasksRetried, 1)
 		logger.Error(
 			"Task %s permanently FAILED after %d retries",
 			task.ID, task.RetryCount-1,
@@ -140,7 +150,6 @@ func (s *Scheduler) FailTask(taskID string, epoch int64) bool {
 	task.NextRunAt = time.Now().Add(delay)
 	task.Status = types.TaskPending
 	task.WorkerID = ""
-
 	logger.Info(
 		"Task %s failed, retry %d/%d scheduled after %v",
 		task.ID,
@@ -200,6 +209,8 @@ func (s *Scheduler) ReassignTasksFromDeadWorker(workerID string) {
 			task.WorkerID = ""
 			task.UpdatedAt = time.Now()
 
+			atomic.AddInt64(&s.Stats.TasksRequeued, 1)
+
 			logger.Info(
 				"Task %s re-queued due to worker %s failure",
 				task.ID,
@@ -213,10 +224,14 @@ func (s *Scheduler) DumpTasks() {
 	logger.Info("This is analytics")
 	for _, t := range s.tasks {
 		logger.Info(
-			"Task %s | status=%s | worker=%s",
+			"Task %s | status=%s | worker=%s | retries=%d/%d | nextRun=%v | epoch=%d",
 			t.ID,
 			t.Status,
 			t.WorkerID,
+			t.RetryCount,
+			t.MaxRetries,
+			t.NextRunAt,
+			t.Epoch,
 		)
 	}
 }
@@ -242,4 +257,20 @@ func (s *Scheduler) IsLeader() bool {
 
 func backoffDuration(retry int) time.Duration {
 	return time.Duration(1<<retry) * time.Second
+}
+
+func (s *Scheduler) GetStats() Stats {
+	return Stats{
+		LeaderElections: atomic.LoadInt64(&s.Stats.LeaderElections),
+
+		TasksSubmitted: atomic.LoadInt64(&s.Stats.TasksSubmitted),
+		TasksAssigned:  atomic.LoadInt64(&s.Stats.TasksAssigned),
+		TasksCompleted: atomic.LoadInt64(&s.Stats.TasksCompleted),
+		TasksFailed:    atomic.LoadInt64(&s.Stats.TasksFailed),
+		TasksRetried:   atomic.LoadInt64(&s.Stats.TasksRetried),
+		TasksRequeued:  atomic.LoadInt64(&s.Stats.TasksRequeued),
+
+		StaleCompletions: atomic.LoadInt64(&s.Stats.StaleCompletions),
+		StaleFailures:    atomic.LoadInt64(&s.Stats.StaleFailures),
+	}
 }
