@@ -17,6 +17,11 @@ type Task struct {
 	Status    TaskStatus
 	WorkerID  string
 	Epoch     int64
+
+	RetryCount int
+	MaxRetries int
+	NextRunAt  time.Time
+	
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
