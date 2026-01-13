@@ -39,6 +39,9 @@ func (s *Scheduler) AddTask(task *types.Task) {
 	defer s.mu.Unlock()
 
 	task.Status = types.TaskPending
+	task.RetryCount = 0
+	task.MaxRetries = 3
+	task.NextRunAt = time.Now()
 	task.CreatedAt = time.Now()
 	task.UpdatedAt = time.Now()
 	s.tasks[task.ID] = task
@@ -58,7 +61,7 @@ func (s *Scheduler) GetNextTask(workerID string) (*types.Task, error) {
 	}
 
 	for _, task := range s.tasks {
-		if task.Status == types.TaskPending {
+		if task.Status == types.TaskPending && time.Now().After(task.NextRunAt) {
 			task.Status = types.TaskRunning
 			task.WorkerID = workerID
 			task.Epoch = s.epoch
@@ -98,9 +101,8 @@ func (s *Scheduler) CompleteTask(taskID string, epoch int64) bool {
 		taskID, epoch,
 	)
 
-		return true
+	return true
 }
-
 
 func (s *Scheduler) FailTask(taskID string, epoch int64) bool {
 	s.mu.Lock()
@@ -111,6 +113,7 @@ func (s *Scheduler) FailTask(taskID string, epoch int64) bool {
 		return false
 	}
 
+	// fencing
 	if task.Epoch != epoch {
 		logger.Error(
 			"Rejected failure of task %s: stale epoch",
@@ -119,10 +122,33 @@ func (s *Scheduler) FailTask(taskID string, epoch int64) bool {
 		return false
 	}
 
-	task.Status = types.TaskFailed
+	task.RetryCount++
 	task.UpdatedAt = time.Now()
 
-	logger.Error("Task %s marked FAILED", taskID)
+	// retries exhausted → terminal failure
+	if task.RetryCount > task.MaxRetries {
+		task.Status = types.TaskFailed
+		logger.Error(
+			"Task %s permanently FAILED after %d retries",
+			task.ID, task.RetryCount-1,
+		)
+		return true
+	}
+
+	// schedule retry
+	delay := backoffDuration(task.RetryCount)
+	task.NextRunAt = time.Now().Add(delay)
+	task.Status = types.TaskPending
+	task.WorkerID = ""
+
+	logger.Info(
+		"Task %s failed, retry %d/%d scheduled after %v",
+		task.ID,
+		task.RetryCount,
+		task.MaxRetries,
+		delay,
+	)
+
 	return true
 }
 
@@ -212,4 +238,8 @@ func (s *Scheduler) CurrentEpoch() int64 {
 func (s *Scheduler) IsLeader() bool {
 	ok, _ := s.election.IsLeader(s.nodeID)
 	return ok
+}
+
+func backoffDuration(retry int) time.Duration {
+	return time.Duration(1<<retry) * time.Second
 }
